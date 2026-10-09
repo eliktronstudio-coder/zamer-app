@@ -1,0 +1,38 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm audit --omit=dev
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e -- --workers=2
+      - name: Beta laptop, tablet and phone scenarios
+        run: npm run test:beta
+      - name: Cloud UI against isolated Auth and RPC mocks
+        run: |
+          VITE_SUPABASE_URL=https://zamer-sync-test.supabase.co VITE_SUPABASE_PUBLISHABLE_KEY=test-public-key npm exec vite build -- --outDir /tmp/zamer-phase12-cloud-dist
+          npm run preview -- --port 4180 --outDir /tmp/zamer-phase12-cloud-dist > /tmp/cloud-preview.log 2>&1 &
+          cloud_preview_pid=$!
+          trap 'kill "$cloud_preview_pid"' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4180/ > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4180/ > /dev/null
+          CLOUD_TEST_BASE_URL=http://127.0.0.1:4180 npm run test:e2e -- tests/e2e/cloud.spec.ts --workers=2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: beta-qa-evidence
+          path: |
+            artifacts/
+            test-results/
+          if-no-files-found: ignore
